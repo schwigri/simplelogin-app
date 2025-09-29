@@ -3,6 +3,8 @@ from flask import render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 from flask_wtf import FlaskForm
 from itsdangerous import TimestampSigner
+from pem import parse
+from sys import getsizeof
 from wtforms import validators
 from wtforms.fields.simple import StringField
 
@@ -22,7 +24,6 @@ from app.models import Mailbox
 from app.pgp_utils import PGPException, load_public_key_and_check
 from app.user_audit_log_utils import emit_user_audit_log, UserAuditLogAction
 from app.utils import sanitize_email, CSRFValidationForm
-
 
 class ChangeEmailForm(FlaskForm):
     email = StringField(
@@ -200,6 +201,9 @@ def mailbox_detail_route(mailbox_id):
                         "info",
                     )
                 else:
+                    if not mailbox.disable_smime:
+                        mailbox.disable_smime = True
+                        flash(f"S/MIME is disabled on {mailbox.email}", "warning")
                     mailbox.disable_pgp = False
                     emit_user_audit_log(
                         user=current_user,
@@ -220,6 +224,49 @@ def mailbox_detail_route(mailbox_id):
             return redirect(
                 url_for("dashboard.mailbox_detail_route", mailbox_id=mailbox_id)
             )
+        elif request.form.get("form-name") == "smime":
+            if request.form.get("action") == "save":
+                if not current_user.is_premium():
+                    flash("Only premium plan can add S/MIME key", "warning")
+                    return redirect(
+                        url_for("dashboard.mailbox_detail_route", mailbox_id=mailbox_id)
+                    )
+                raw_smime_cert_input = request.form.get("smime")
+                if getsizeof(raw_smime_cert_input) > 15360:
+                    flash("S/MIME certificate is too big! Must be smaller than 15 KiB", "warning")
+                    return redirect(
+                        url_for("dashboard.mailbox_detail_route", mailbox_id=mailbox_id)
+                    )
+                smime_certs = parse(raw_smime_cert_input)
+                if not len(smime_certs):
+                    flash("Unable to validate S/MIME certificate", "warning")
+                    return redirect(
+                        url_for("dashboard.mailbox_detail_route", mailbox_id=mailbox_id)
+                    )
+                mailbox.smime_public_key = str(smime_certs[0])
+                Session.commit()
+                flash("Your S/MIME public key is saved successfully", "success")
+                return redirect(
+                    url_for("dashboard.mailbox_detail_route", mailbox_id=mailbox_id)
+                )
+            elif request.form.get("action") == "remove":
+                mailbox.smime_public_key = None
+                mailbox.disable_smime = False
+                Session.commit()
+                flash("Your S/MIME public key is removed successfully", "success")
+                return redirect(
+                    url_for("dashboard.mailbox_detail_route", mailbox_id=mailbox_id)
+                )
+        elif request.form.get("form-name") == "toggle-smime":
+            if request.form.get("smime-enabled") == "on":
+                if not mailbox.disable_pgp:
+                    mailbox.disable_pgp = True
+                    flash(f"PGP is disabled on {mailbox.email}", "warning")
+                mailbox.disable_smime = False
+                flash(f"S/MIME is enabled on {mailbox.email}", "success")
+            else:
+                mailbox.disable_smime = True
+                flash(f"S/MIME is disabled on {mailbox.email}", "info")
         elif request.form.get("form-name") == "generic-subject":
             if request.form.get("action") == "save":
                 mailbox.generic_subject = request.form.get("generic-subject")

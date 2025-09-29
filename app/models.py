@@ -1636,6 +1636,12 @@ class Alias(Base, ModelMixin):
         sa.Boolean, nullable=False, default=False, server_default="0"
     )
 
+    # If the mailbox has S/MIME enabled, user can choose disable the S/MIME on the alias
+    # this is useful when some senders already support S/MIME
+    disable_smime = sa.Column(
+        sa.Boolean, nullable=False, default=False, server_default="0"
+    )
+
     # a way to bypass the bounce automatic disable mechanism
     cannot_be_disabled = sa.Column(
         sa.Boolean, nullable=False, default=False, server_default="0"
@@ -1741,6 +1747,18 @@ class Alias(Base, ModelMixin):
 
     def pgp_enabled(self) -> bool:
         if self.mailbox_support_pgp() and not self.disable_pgp:
+            return True
+        return False
+
+    def mailbox_support_smime(self) -> bool:
+        """return True if one of the mailboxes supports S/MIME"""
+        for mb in self.mailboxes:
+            if mb.smim_enabled():
+                return True
+        return False
+
+    def smime_enabled(self) -> bool:
+        if self.mailbox_support_smime() and not self.disable_smime:
             return True
         return False
 
@@ -2925,6 +2943,10 @@ class Mailbox(Base, ModelMixin):
     disable_pgp = sa.Column(
         sa.Boolean, default=False, nullable=False, server_default="0"
     )
+    smime_public_key = sa.Column(sa.Text, nullable=True)
+    disable_smime = sa.Column(
+        sa.Boolean, default=False, nullable=False, server_default="0"
+    )
 
     # incremented when a check is failed on the mailbox
     # alert when the number exceeds a threshold
@@ -2954,6 +2976,12 @@ class Mailbox(Base, ModelMixin):
 
     def pgp_enabled(self) -> bool:
         if self.pgp_finger_print and not self.disable_pgp:
+            return True
+
+        return False
+
+    def smime_enabled(self) -> bool:
+        if self.smime_public_key and not self.disable_smime:
             return True
 
         return False
